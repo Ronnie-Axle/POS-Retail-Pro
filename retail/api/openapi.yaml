@@ -1,0 +1,288 @@
+openapi: 3.1.0
+info:
+  title: POS Retail Pro Mobile API
+  version: 1.0.0
+  description: >
+    Mobile BFF contracts for catalog, sales and payment operations. All money
+    amounts are integer UGX. Authentication and idempotency are enforced by
+    the deployed gateway; this file defines contracts only.
+servers:
+  - url: https://api.example.com/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Inventory
+  - name: POS
+  - name: Payments
+paths:
+  /products:
+    get:
+      tags: [Inventory]
+      operationId: listProducts
+      parameters:
+        - in: query
+          name: query
+          schema: { type: string }
+        - in: query
+          name: categoryId
+          schema: { type: string }
+        - in: query
+          name: lowStock
+          schema: { type: boolean }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        "200":
+          description: Catalog page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Product" }
+                  nextCursor:
+                    type: [string, "null"]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /products/{productId}:
+    get:
+      tags: [Inventory]
+      operationId: getProduct
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Product and current stock
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Inventory]
+      operationId: adjustStock
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantityDelta, reason]
+              properties:
+                quantityDelta: { type: integer }
+                reason: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Updated product stock
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /orders:
+    post:
+      tags: [POS]
+      operationId: createOrder
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOrderRequest" }
+      responses:
+        "201":
+          description: Order created in PENDING_PAYMENT
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [POS]
+      operationId: listOrders
+      parameters:
+        - in: query
+          name: state
+          schema: { $ref: "#/components/schemas/OrderState" }
+        - in: query
+          name: cursor
+          schema: { type: string }
+      responses:
+        "200":
+          description: Order page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+                  nextCursor:
+                    type: [string, "null"]
+  /orders/{orderId}:
+    get:
+      tags: [POS]
+      operationId: getOrder
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: Order details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /orders/{orderId}/void:
+    post:
+      tags: [POS]
+      operationId: voidOrder
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Voided order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /payments:
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePaymentRequest" }
+      responses:
+        "201":
+          description: Payment initiated or completed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "402": { $ref: "#/components/responses/PaymentRequired" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [Payments]
+      operationId: getPaymentByIdempotencyKey
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Idempotent payment result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProductId:
+      in: path
+      name: productId
+      required: true
+      schema: { type: string }
+    OrderId:
+      in: path
+      name: orderId
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token
+    NotFound:
+      description: Resource not found
+    Conflict:
+      description: Invalid state transition, stock conflict, or key reuse
+    PaymentRequired:
+      description: Payment declined or could not be authorized
+  schemas:
+    Product:
+      type: object
+      required: [id, name, priceUgx, stockQuantity, reorderAt, categoryId]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        priceUgx: { type: integer, minimum: 0 }
+        stockQuantity: { type: integer }
+        reorderAt: { type: integer, minimum: 0 }
+        categoryId: { type: string }
+        imageUrl: { type: [string, "null"], format: uri }
+    OrderState:
+      type: string
+      enum: [DRAFT, PENDING_PAYMENT, COMPLETED, VOIDED]
+    OrderLine:
+      type: object
+      required: [productId, quantity, unitPriceUgx]
+      properties:
+        productId: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        unitPriceUgx: { type: integer, minimum: 0 }
+    CreateOrderRequest:
+      type: object
+      required: [lines, taxRateBasisPoints]
+      properties:
+        customerId: { type: [string, "null"] }
+        lines:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/OrderLine" }
+        taxRateBasisPoints:
+          type: integer
+          const: 1800
+    Order:
+      type: object
+      required: [id, state, subtotalUgx, taxUgx, totalUgx, lines, createdAt]
+      properties:
+        id: { type: string }
+        state: { $ref: "#/components/schemas/OrderState" }
+        customerId: { type: [string, "null"] }
+        subtotalUgx: { type: integer, minimum: 0 }
+        taxUgx: { type: integer, minimum: 0 }
+        totalUgx: { type: integer, minimum: 0 }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+        createdAt: { type: string, format: date-time }
+    PaymentMethod:
+      type: string
+      enum: [CASH, CARD, MOBILE_MONEY, BANK_TRANSFER]
+    CreatePaymentRequest:
+      type: object
+      required: [orderId, amountUgx, method]
+      properties:
+        orderId: { type: string }
+        amountUgx: { type: integer, minimum: 0 }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
+        provider: { type: [string, "null"] }
+        cashReceivedUgx: { type: [integer, "null"], minimum: 0 }
+    Payment:
+      type: object
+      required: [id, orderId, amountUgx, method, status, createdAt]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        amountUgx: { type: integer, minimum: 0 }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, FAILED, REFUNDED]
+        providerReference: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
